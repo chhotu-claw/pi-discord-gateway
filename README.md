@@ -34,7 +34,7 @@ Discord ──discord.js──→ Gateway ──pi subprocess──→ Pi Agent
 ### 2. Install
 
 ```bash
-git clone https://github.com/patchfx/pi-discord-gateway.git
+git clone https://github.com/Crokily/pi-discord-gateway.git
 cd pi-discord-gateway
 npm install
 npm run build
