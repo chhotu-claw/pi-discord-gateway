@@ -93,10 +93,20 @@ async function processMessage(
 
   // Typing indicator (repeat every 8s while agent runs)
   let typingAlive = true;
+  let cancelTypingDelay = () => {};
+  const stopTypingLoop = async () => {
+    typingAlive = false;
+    cancelTypingDelay();
+    await typingPromise;
+  };
   const typingLoop = async () => {
     while (typingAlive) {
       await setTyping(jid);
-      await sleep(8000);
+      if (!typingAlive) break;
+      const delay = cancellableSleep(8000);
+      cancelTypingDelay = delay.cancel;
+      await delay.promise;
+      cancelTypingDelay = () => {};
     }
   };
   const typingPromise = typingLoop();
@@ -109,11 +119,16 @@ async function processMessage(
 
     const result = await invokeAgent(channel.folder, prompt);
 
-    typingAlive = false;
-    await typingPromise;
+    await stopTypingLoop();
 
     if (result.ok) {
-      await sendResponse(jid, result.text);
+      const sent = await sendResponse(jid, result.text);
+      if (!sent) {
+        markMessageFailed(rowid);
+        logger.warn({ jid }, 'Agent response generated but could not be delivered to Discord');
+        return;
+      }
+
       logMessage(jid, 'assistant', result.text);
       markMessageDone(rowid);
       logger.info({ jid, responseLen: result.text.length }, 'Message processed');
@@ -124,8 +139,7 @@ async function processMessage(
       logger.warn({ jid, error: result.error }, 'Agent returned error');
     }
   } catch (err: any) {
-    typingAlive = false;
-    await typingPromise;
+    await stopTypingLoop();
     logger.error({ jid, err: err.message }, 'processMessage failed');
     markMessageFailed(rowid);
     try {
@@ -136,6 +150,24 @@ async function processMessage(
   }
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function cancellableSleep(ms: number): { promise: Promise<void>; cancel: () => void } {
+  let finished = false;
+  let timer: NodeJS.Timeout | undefined;
+  let resolvePromise: () => void = () => {};
+
+  const promise = new Promise<void>((resolve) => {
+    resolvePromise = () => {
+      if (finished) return;
+      finished = true;
+      if (timer) clearTimeout(timer);
+      resolve();
+    };
+
+    timer = setTimeout(resolvePromise, ms);
+  });
+
+  return {
+    promise,
+    cancel: resolvePromise,
+  };
 }

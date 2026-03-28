@@ -1,25 +1,27 @@
 import { spawn } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { config } from './config.js';
 import { logger } from './logger.js';
+import { resolveChannelSessionDir } from './session-path.js';
 import type { AgentResult } from './types.js';
 
 /**
  * Invoke pi agent as a subprocess.
  *
  * Each channel gets its own session directory so conversation history persists.
- * Uses `pi --session <dir> -p <message>` (print mode, no TUI).
+ * Uses `pi --session-dir <dir> --continue -p <message>` (print mode, no TUI).
  */
 export async function invokeAgent(
   channelFolder: string,
   userText: string,
   opts?: { model?: string; thinking?: string; signal?: AbortSignal },
 ): Promise<AgentResult> {
-  const sessionDir = resolve(config.sessionsDir, channelFolder);
+  const sessionDir = resolveChannelSessionDir(channelFolder);
   mkdirSync(sessionDir, { recursive: true });
 
-  const args: string[] = ['--session', sessionDir];
+  // `--session` expects a session *file* path. We want a dedicated directory per
+  // Discord channel and to keep reusing the most recent session inside it.
+  const args: string[] = ['--session-dir', sessionDir, '--continue'];
 
   // Model
   const model = opts?.model || config.piModel;

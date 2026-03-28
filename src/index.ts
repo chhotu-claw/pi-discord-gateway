@@ -12,6 +12,7 @@ import { logger } from './logger.js';
 import { initDb, closeDb, registerChannel, unregisterChannel, getAllChannels } from './db.js';
 import { startDiscord, stopDiscord, getBotTag } from './discord.js';
 import { startProcessingLoop, stopProcessingLoop } from './queue.js';
+import { validateSessionFolder } from './session-path.js';
 import type { RegisteredChannel } from './types.js';
 
 // ── CLI commands (run without starting the bot) ──
@@ -77,38 +78,44 @@ function cliRegister(args: string[]): void {
 
   initDb();
 
-  const channelId = args[0];
-  const name = args[1];
+  try {
+    const channelId = args[0];
+    const name = args[1];
 
-  let folder = `ch_${channelId}`;
-  let requiresTrigger = true;
-  let isMain = false;
+    let folder = validateSessionFolder(`ch_${channelId}`);
+    let requiresTrigger = true;
+    let isMain = false;
 
-  for (let i = 2; i < args.length; i++) {
-    if (args[i] === '--folder' && args[i + 1]) {
-      folder = args[++i];
-    } else if (args[i] === '--no-trigger') {
-      requiresTrigger = false;
-    } else if (args[i] === '--main') {
-      isMain = true;
-      requiresTrigger = false;
+    for (let i = 2; i < args.length; i++) {
+      if (args[i] === '--folder' && args[i + 1]) {
+        folder = validateSessionFolder(args[++i]);
+      } else if (args[i] === '--no-trigger') {
+        requiresTrigger = false;
+      } else if (args[i] === '--main') {
+        isMain = true;
+        requiresTrigger = false;
+      }
     }
+
+    const ch: RegisteredChannel = {
+      jid: `dc:${channelId}`,
+      name,
+      folder,
+      requiresTrigger,
+      isMain,
+    };
+
+    registerChannel(ch);
+    console.log(`✓ Registered channel: ${name} (${ch.jid})`);
+    console.log(`  Folder: ${folder}`);
+    console.log(`  Trigger required: ${requiresTrigger}`);
+    console.log(`  Main channel: ${isMain}`);
+    closeDb();
+  } catch (err: any) {
+    closeDb();
+    console.error(`Error: ${err.message}`);
+    process.exit(1);
   }
-
-  const ch: RegisteredChannel = {
-    jid: `dc:${channelId}`,
-    name,
-    folder,
-    requiresTrigger,
-    isMain,
-  };
-
-  registerChannel(ch);
-  console.log(`✓ Registered channel: ${name} (${ch.jid})`);
-  console.log(`  Folder: ${folder}`);
-  console.log(`  Trigger required: ${requiresTrigger}`);
-  console.log(`  Main channel: ${isMain}`);
-  closeDb();
 }
 
 function cliUnregister(args: string[]): void {
@@ -159,7 +166,7 @@ USAGE:
   npx pi-discord-gateway help                     Show this help
 
 REGISTER OPTIONS:
-  --folder <name>    Session folder name (default: ch_<id>)
+  --folder <name>    Relative session folder name (default: ch_<id>)
   --no-trigger       Respond to all messages (not just @mentions)
   --main             Mark as main channel (implies --no-trigger)
 

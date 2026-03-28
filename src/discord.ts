@@ -10,6 +10,7 @@ import {
   Client,
   Events,
   GatewayIntentBits,
+  Partials,
   type Message,
   type TextChannel,
   type DMChannel,
@@ -35,19 +36,35 @@ export async function startDiscord(): Promise<void> {
       GatewayIntentBits.MessageContent,
       GatewayIntentBits.DirectMessages,
     ],
+    // Required for DM message events in discord.js.
+    partials: [Partials.Channel],
   });
 
   client.on(Events.MessageCreate, handleMessage);
   client.on(Events.Error, (err) => logger.error({ err: err.message }, 'Discord client error'));
 
-  return new Promise<void>((resolve) => {
-    client!.once(Events.ClientReady, (ready) => {
+  return new Promise<void>((resolve, reject) => {
+    const onReady = (ready: Client<true>) => {
+      cleanup();
       botId = ready.user.id;
-      triggerPattern = new RegExp(`^@${config.triggerName}\\b`, 'i');
+      triggerPattern = new RegExp(`^@${escapeRegExp(config.triggerName)}\\b`, 'i');
       logger.info({ tag: ready.user.tag, id: botId }, 'Discord bot connected');
       resolve();
-    });
-    client!.login(config.discordToken);
+    };
+
+    const onStartupError = (err: Error) => {
+      cleanup();
+      reject(err);
+    };
+
+    const cleanup = () => {
+      client?.off(Events.ClientReady, onReady);
+      client?.off(Events.Error, onStartupError);
+    };
+
+    client!.once(Events.ClientReady, onReady);
+    client!.once(Events.Error, onStartupError);
+    client!.login(config.discordToken).catch(onStartupError);
   });
 }
 
@@ -144,8 +161,8 @@ async function handleMessage(message: Message): Promise<void> {
 
 const DISCORD_MAX_LENGTH = 2000;
 
-export async function sendResponse(jid: string, text: string): Promise<void> {
-  if (!client) return;
+export async function sendResponse(jid: string, text: string): Promise<boolean> {
+  if (!client) return false;
 
   const channelId = jid.replace(/^dc:/, '');
 
@@ -153,7 +170,7 @@ export async function sendResponse(jid: string, text: string): Promise<void> {
     const channel = await client.channels.fetch(channelId);
     if (!channel || !('send' in channel)) {
       logger.warn({ jid }, 'Channel not found or not text-based');
-      return;
+      return false;
     }
 
     const textChannel = channel as TextChannel | DMChannel;
@@ -168,8 +185,10 @@ export async function sendResponse(jid: string, text: string): Promise<void> {
       }
     }
     logger.info({ jid, length: text.length }, 'Response sent');
+    return true;
   } catch (err: any) {
     logger.error({ jid, err: err.message }, 'Failed to send message');
+    return false;
   }
 }
 
@@ -213,4 +232,8 @@ function splitMessage(text: string, max: number): string[] {
   }
   if (remaining) chunks.push(remaining);
   return chunks;
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

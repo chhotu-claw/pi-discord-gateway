@@ -68,7 +68,7 @@ node dist/index.js register 1234567890 "my-server #general" --no-trigger
 Options:
 - `--no-trigger` — respond to all messages (not just @mentions)
 - `--main` — mark as main/admin channel (implies `--no-trigger`)
-- `--folder <name>` — custom session folder name
+- `--folder <name>` — custom relative session folder name (must stay under `sessions/`)
 
 ### 6. Start
 
@@ -98,8 +98,8 @@ node dist/index.js help                         # Show help
 |----------|---------|-------------|
 | `DISCORD_BOT_TOKEN` | *(required)* | Discord bot token |
 | `PI_BIN` | `pi` | Path to pi binary |
-| `PI_MODEL` | *(none)* | Model for pi (e.g., `anthropic/claude-sonnet-4-20250514`) |
-| `PI_THINKING` | *(none)* | Thinking level |
+| `PI_MODEL` | *(none)* | Optional model override for pi. Leave unset to use the normal pi default/settings. |
+| `PI_THINKING` | *(none)* | Optional thinking override. Leave unset to use the normal pi default/settings. |
 | `TRIGGER_NAME` | `Andy` | Name used in trigger pattern (`@Andy`) |
 | `MAX_CONCURRENCY` | `3` | Max parallel pi invocations |
 | `AUTO_REGISTER_DMS` | `true` | Auto-register DM channels |
@@ -127,7 +127,7 @@ journalctl --user -u pi-discord-gateway -f
 - **`src/discord.ts`** — Discord.js client: receives messages, sends responses, typing indicators
 - **`src/db.ts`** — SQLite: channel registry, message queue, message log
 - **`src/queue.ts`** — Polling loop: claims messages, enforces concurrency, dispatches to agent
-- **`src/agent.ts`** — Spawns `pi --session <dir> -p <message>` subprocesses
+- **`src/agent.ts`** — Spawns `pi --session-dir <dir> --continue -p <message>` subprocesses
 - **`src/config.ts`** — Environment-based configuration
 - **`src/index.ts`** — Entry point: CLI commands + gateway startup
 
