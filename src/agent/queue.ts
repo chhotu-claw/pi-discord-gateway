@@ -19,7 +19,7 @@ import {
   getChannel,
 } from '../db.js';
 import { invokeAgent } from './invoke.js';
-import { sendResponse, setTyping } from '../discord/client.js';
+import { sendResponse, setTyping, autoThreadOnMessage } from '../discord/client.js';
 import { computeEffectiveChannelSettings } from './channel-settings.js';
 
 /** Channels currently being processed (per-channel serial lock) */
@@ -227,11 +227,25 @@ async function processMessage(
     }
 
     if (result.ok) {
-      const sent = await sendResponse(jid, result.text);
-      if (!sent) {
+      const sentMessage = await sendResponse(jid, result.text);
+      if (!sentMessage) {
         markMessageFailed(rowid);
         logger.warn({ jid }, 'Agent response generated but could not be delivered to Discord');
         return;
+      }
+
+      // Scheduled tasks fire into a parent channel with no anchor user
+      // message, so the user has nowhere clean to reply. Mirror the
+      // inbound auto-thread behaviour here: start a thread on the bot's
+      // response and register it under the parent's workspace, so the
+      // user reply lands inside the thread and routes back to Pi
+      // automatically.
+      if (config.autoThread && senderName === 'Scheduler') {
+        const parent = getChannel(jid);
+        if (parent) {
+          const dateStr = new Date().toISOString().slice(0, 10);
+          await autoThreadOnMessage(sentMessage, parent, `check-in ${dateStr}`);
+        }
       }
 
       logMessage(jid, 'assistant', result.text);

@@ -239,44 +239,14 @@ async function handleMessage(message: Message): Promise<void> {
   // are matched directly by their thread jid.  Each thread gets its own
   // session-dir, so threads are isolated Pi conversations that share the
   // parent's persistent workspace files.
-  try {
-    const isAlreadyInThread =
-      typeof message.channel.isThread === 'function' && message.channel.isThread();
-    if (config.autoThread && !isDM && !isAlreadyInThread && 'startThread' in message) {
-      const threadName =
-        (content || senderName || 'conversation')
-          .slice(0, 80)
-          .replace(/\s+/g, ' ')
-          .trim() || 'conversation';
-      const thread = await message.startThread({
-        name: threadName,
-        autoArchiveDuration: config.autoThreadArchiveMinutes as ThreadAutoArchiveDuration,
-      });
-      if (thread?.id) {
-        const threadJid = `dc:${thread.id}`;
-        const threadReg: RegisteredChannel = {
-          jid: threadJid,
-          name: `${channel.name} → ${threadName}`,
-          folder: `ch_${thread.id}`,
-          requiresTrigger: false,
-          isMain: false,
-          modelOverride: channel.modelOverride || '',
-          thinkingOverride: channel.thinkingOverride || '',
-          cwdOverride: channel.cwdOverride || '',
-        };
-        dbRegisterChannel(threadReg);
-        logger.info(
-          { parent: jid, thread: threadJid, name: threadName },
-          'Auto-created Discord thread',
-        );
-        channel = threadReg;
-      }
-    }
-  } catch (err) {
-    logger.warn(
-      { jid, err: (err as Error)?.message },
-      'Auto-thread creation failed; falling back to parent channel',
-    );
+  if (config.autoThread && !isDM) {
+    const threadName =
+      (content || senderName || 'conversation')
+        .slice(0, 80)
+        .replace(/\s+/g, ' ')
+        .trim() || 'conversation';
+    const threadReg = await autoThreadOnMessage(message, channel, threadName);
+    if (threadReg) channel = threadReg;
   }
 
   // ── Enqueue ──
@@ -295,8 +265,8 @@ async function handleMessage(message: Message): Promise<void> {
 
 const DISCORD_MAX_LENGTH = 2000;
 
-export async function sendResponse(jid: string, text: string): Promise<boolean> {
-  if (!client) return false;
+export async function sendResponse(jid: string, text: string): Promise<Message | null> {
+  if (!client) return null;
 
   const channelId = jid.replace(/^dc:/, '');
 
@@ -304,26 +274,84 @@ export async function sendResponse(jid: string, text: string): Promise<boolean> 
     const channel = await client.channels.fetch(channelId);
     if (!channel || !('send' in channel)) {
       logger.warn({ jid }, 'Channel not found or not text-based');
-      return false;
+      return null;
     }
 
     const textChannel = channel as TextChannel | DMChannel;
 
+    let firstMessage: Message | null = null;
     if (text.length <= DISCORD_MAX_LENGTH) {
-      await textChannel.send(text);
+      firstMessage = await textChannel.send(text);
     } else {
       // Split at line boundaries when possible
       const chunks = splitMessage(text, DISCORD_MAX_LENGTH);
       for (const chunk of chunks) {
-        await textChannel.send(chunk);
+        const sent = await textChannel.send(chunk);
+        if (!firstMessage) firstMessage = sent;
       }
     }
     logger.info({ jid, length: text.length }, 'Response sent');
-    return true;
+    return firstMessage;
   } catch (err: any) {
     logger.error({ jid, err: err.message }, 'Failed to send message');
-    return false;
+    return null;
   }
+}
+
+/**
+ * Create a Discord thread anchored on the given message and register it
+ * with the same workspace/model/cwd as the parent channel. Used by both
+ * the inbound user-message auto-thread path and the scheduled-task
+ * proactive-checkin path (so cron-fired bot posts don't sit orphaned in
+ * the parent channel).
+ *
+ * Returns the new thread's RegisteredChannel, or undefined if threading
+ * was skipped (already in a thread, no startThread method, error).
+ */
+export async function autoThreadOnMessage(
+  message: { channel?: { isThread?: () => boolean }; startThread?: Function },
+  parentChannel: RegisteredChannel,
+  threadName: string,
+): Promise<RegisteredChannel | undefined> {
+  try {
+    const isAlreadyInThread =
+      typeof message.channel?.isThread === 'function' && message.channel.isThread();
+    if (isAlreadyInThread) return undefined;
+    if (typeof message.startThread !== 'function') return undefined;
+
+    const trimmed = (threadName || 'conversation').slice(0, 80).trim() || 'conversation';
+
+    const thread = await message.startThread({
+      name: trimmed,
+      autoArchiveDuration: config.autoThreadArchiveMinutes as ThreadAutoArchiveDuration,
+    });
+
+    if (thread?.id) {
+      const threadJid = `dc:${thread.id}`;
+      const threadReg: RegisteredChannel = {
+        jid: threadJid,
+        name: `${parentChannel.name} → ${trimmed}`,
+        folder: `ch_${thread.id}`,
+        requiresTrigger: false,
+        isMain: false,
+        modelOverride: parentChannel.modelOverride || '',
+        thinkingOverride: parentChannel.thinkingOverride || '',
+        cwdOverride: parentChannel.cwdOverride || '',
+      };
+      dbRegisterChannel(threadReg);
+      logger.info(
+        { parent: parentChannel.jid, thread: threadJid, name: trimmed },
+        'Auto-created Discord thread',
+      );
+      return threadReg;
+    }
+  } catch (err) {
+    logger.warn(
+      { jid: parentChannel.jid, err: (err as Error)?.message },
+      'Auto-thread creation failed; falling back to parent channel',
+    );
+  }
+  return undefined;
 }
 
 export async function setTyping(jid: string): Promise<void> {
